@@ -17,6 +17,7 @@ env = TimeLimit(
 # Declare network
 class ProjectAgent:
     def __init__(self):
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.state_dim = env.observation_space.shape[0]
         self.n_action = env.action_space.n 
         self.nb_neurons=128
@@ -24,16 +25,13 @@ class ProjectAgent:
                                 nn.ReLU(),
                                 nn.Linear(self.nb_neurons, self.nb_neurons),
                                 nn.ReLU(), 
-                                nn.Linear(self.nb_neurons, self.n_action)).to(device)
+                                nn.Linear(self.nb_neurons, self.n_action)).to(self.device)
 
         # DQN config
         self.model_path= 'best_model_standard_scaling.pth'
         self.scaling='standard'
         self.states_means = np.load('states_means.npy')
         self.states_stds = np.load('states_stds.npy')
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-        pass
 
 
     def act(self, observation, use_random=False):
