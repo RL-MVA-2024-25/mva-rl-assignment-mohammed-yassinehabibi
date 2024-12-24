@@ -5,7 +5,6 @@ from torch import nn
 from dqn_agent import dqn_agent, greedy_action
 import numpy as np
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 env = TimeLimit(
     env=HIVPatient(domain_randomization=False), max_episode_steps=200
 )  # The time wrapper limits the number of steps in an episode at 200.
@@ -32,6 +31,7 @@ class ProjectAgent:
         self.scaling='standard'
         self.states_means = np.load('states_means.npy')
         self.states_stds = np.load('states_stds.npy')
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         pass
 
@@ -49,5 +49,5 @@ class ProjectAgent:
         pass
 
     def load(self):
-        self.model.load_state_dict(torch.load(self.model_path, weights_only=False))
+        self.model.load_state_dict(torch.load(self.model_path, weights_only=False, map_location=self.device))
         pass
