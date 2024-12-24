@@ -78,7 +78,7 @@ class dqn_agent:
         self.epsilon_delay = config['epsilon_delay_decay']
         self.epsilon_step = (self.epsilon_max - self.epsilon_min) / self.epsilon_stop
         self.model = model
-        self.criterion = torch.nn.SmoothL1Loss() #Or torch.nn.MSELoss()
+        self.criterion = config['criterion'] #torch.nn.SmoothL1Loss() #Or torch.nn.MSELoss()
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config['learning_rate'])
         self.device = device  # Store device
         self.load = load
