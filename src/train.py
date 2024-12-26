@@ -7,7 +7,8 @@ import numpy as np
 
 env = TimeLimit(
     env=HIVPatient(domain_randomization=False), max_episode_steps=200
-)  # The time wrapper limits the number of steps in an episode at 200.
+)
+# The time wrapper limits the number of steps in an episode at 200.
 # Now is the floor is yours to implement the agent and train it.
 
 
@@ -29,9 +30,12 @@ class ProjectAgent:
 
         # DQN config
         self.model_path= 'best_model_standard_scaling.pth'
+        self.model_general_path= 'best_model_standard_scaling_general.pth'
         self.scaling='standard'
         self.states_means = np.load('states_means.npy')
         self.states_stds = np.load('states_stds.npy')
+        self.env_params = np.load('params.npy')
+        self.nb_steps = 0
 
 
     def act(self, observation, use_random=False):
@@ -41,6 +45,9 @@ class ProjectAgent:
             observation = np.log10(observation + 1)
         elif self.scaling == 'standard':
             observation = (observation - self.states_means) / self.states_stds
+        self.nb_steps += 1
+        if self.nb_steps == 1000 - 1:
+            self.model.load_state_dict(torch.load(self.model_general_path, weights_only=False, map_location=self.device))
         return greedy_action(self.model, observation)
 
     def save(self, path):

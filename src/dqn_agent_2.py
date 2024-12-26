@@ -29,7 +29,7 @@ def greedy_action(network, state):
         Q = network(torch.Tensor(state).unsqueeze(0).to(device))
         return torch.argmax(Q).item()
 
-def evaluate_agent(agent: Agent, env: gym.Env, nb_episode: int = 10, scaling='log') -> float:
+def evaluate_agent_2(agent: Agent, env: gym.Env, nb_episode: int = 10, scaling='log') -> float:
     """
     Evaluate an agent in a given environment.
 
@@ -46,6 +46,7 @@ def evaluate_agent(agent: Agent, env: gym.Env, nb_episode: int = 10, scaling='lo
     rewards: list[float] = []
     for _ in range(nb_episode):
         obs, info = env.reset()
+        env.env.k1, env.env.k2, env.env.f = agent.env_params[np.random.randint(0, len(agent.env_params))]
         if scaling == 'log':
             obs = np.log10(obs + 1)
         elif scaling == 'standard':
@@ -65,7 +66,7 @@ def evaluate_agent(agent: Agent, env: gym.Env, nb_episode: int = 10, scaling='lo
     env.reset()
     return mean(rewards)    
 
-class dqn_agent:
+class dqn_agent_2:
     def __init__(self, config, model, load=False):
         device = "cuda" if next(model.parameters()).is_cuda else "cpu"
         self.gamma = config['gamma']
@@ -90,6 +91,7 @@ class dqn_agent:
             self.scaling = 'standard'
         elif config['scaling']=='log':
             self.scaling = 'log'
+        self.env_params = np.load('params.npy')
 
 
     def gradient_step(self):
@@ -109,6 +111,7 @@ class dqn_agent:
         episode = 0
         episode_cum_reward = 0
         state, _ = env.reset()
+        env.env.k1, env.env.k2, env.env.f = self.env_params[np.random.randint(0, len(self.env_params))]
         if self.scaling == 'log':
             state = np.log10(state + 1)
         elif self.scaling == 'standard':
@@ -119,10 +122,7 @@ class dqn_agent:
         # Track the best reward
         best_deterministic_reward = -float('inf')
         if self.load:
-            if env.env.domain_randomization:
-                best_deterministic_reward = torch.load("best_randomized_reward.pth", weights_only=True)
-            else:
-                best_deterministic_reward = torch.load("best_deterministic_reward.pth", weights_only=True)
+            best_deterministic_reward = torch.load("best_deterministic_reward_2.pth", weights_only=False)
             print(f"Loaded model with deterministic reward {best_deterministic_reward:.2f}M")
         while episode < max_episode:
             # update epsilon
@@ -146,35 +146,32 @@ class dqn_agent:
             self.memory.append(state, action, reward, next_state, done)
             episode_cum_reward += true_reward
 
-            # train
-            self.gradient_step()
+            if step > self.epsilon_delay and step % 1 == 0:
+                # train
+                self.gradient_step()
 
             # next transition
             step += 1
             if done or trunc:
-                # Check if current episode return is better than the best
-                if env.env.domain_randomization:
-                    deterministic_reward = evaluate_agent(self, env, 20, scaling=self.scaling)/1_000_000
-                else:
-                    deterministic_reward = evaluate_agent(self, env, 1, scaling=self.scaling)/1_000_000
-                # Save the best model
-                if deterministic_reward > best_deterministic_reward:
-                    best_deterministic_reward = deterministic_reward
-                    torch.save(self.model.state_dict(), self.best_model_path)
-                    if env.env.domain_randomization:
-                        torch.save(best_deterministic_reward, "best_randomized_reward.pth")
-                    else:
-                        torch.save(best_deterministic_reward, "best_deterministic_reward.pth")
-                    print("Evaluation deterministic reward", f"{deterministic_reward:.1f}M")
-                #self.gradient_step()
-                print("Episode {:3d}".format(episode), 
-                      "epsilon {:6.2f}".format(epsilon), 
-                      "batch size {:5d}".format(len(self.memory)), 
-                      "episode return {:4.1f}M".format(episode_cum_reward),
-                        "loss {:4.1f}".format(self.losses[-1]),
-                      sep=', ')
+                if step > self.epsilon_delay:
+                    # Check if current episode return is better than the best
+                    deterministic_reward = evaluate_agent_2(self, env, 4, scaling=self.scaling)/1_000_000
+                    # Save the best model
+                    if deterministic_reward > best_deterministic_reward:
+                        best_deterministic_reward = deterministic_reward
+                        torch.save(self.model.state_dict(), self.best_model_path)
+                        torch.save(best_deterministic_reward, "best_deterministic_reward_2.pth")
+                        print("Evaluation deterministic reward", f"{deterministic_reward:.1f}M")
+                    #self.gradient_step()
+                    print("Episode {:3d}".format(episode), 
+                        "epsilon {:6.2f}".format(epsilon), 
+                        "batch size {:5d}".format(len(self.memory)), 
+                        "episode return {:4.1f}M".format(episode_cum_reward),
+                            "loss {:4.1f}".format(self.losses[-1]),
+                        sep=', ')
                 episode += 1
                 state, _ = env.reset()
+                env.env.k1, env.env.k2, env.env.f = self.env_params[np.random.randint(0, len(self.env_params))]
                 if self.scaling == 'log':
                     state = np.log10(state + 1)
                 elif self.scaling == 'standard':

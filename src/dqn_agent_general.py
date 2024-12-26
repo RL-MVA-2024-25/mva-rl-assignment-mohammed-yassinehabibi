@@ -4,6 +4,8 @@ import random
 from statistics import mean
 from interface import Agent
 import gymnasium as gym
+from gymnasium.wrappers import TimeLimit
+from env_hiv import HIVPatient
 
 
 class ReplayBuffer:
@@ -29,7 +31,7 @@ def greedy_action(network, state):
         Q = network(torch.Tensor(state).unsqueeze(0).to(device))
         return torch.argmax(Q).item()
 
-def evaluate_agent(agent: Agent, env: gym.Env, nb_episode: int = 10, scaling='log') -> float:
+def evaluate_agent_general(agent: Agent, env: gym.Env, nb_episode: int = 10, scaling='log') -> float:
     """
     Evaluate an agent in a given environment.
 
@@ -41,11 +43,13 @@ def evaluate_agent(agent: Agent, env: gym.Env, nb_episode: int = 10, scaling='lo
     Returns:
         float: The mean reward of the agent over the episodes.
     """
-    states_means = np.load('states_means.npy')
-    states_stds = np.load('states_stds.npy')
+    states_means = np.load('states_means_general.npy')
+    states_stds = np.load('states_stds_general.npy')
     rewards: list[float] = []
     for _ in range(nb_episode):
         obs, info = env.reset()
+        env_params = np.array([env.env.k1, env.env.k2, env.env.f])
+        obs = np.concatenate((obs, env_params))
         if scaling == 'log':
             obs = np.log10(obs + 1)
         elif scaling == 'standard':
@@ -56,16 +60,16 @@ def evaluate_agent(agent: Agent, env: gym.Env, nb_episode: int = 10, scaling='lo
         while not done and not truncated:
             action = agent.act(obs)
             obs, reward, done, truncated, _ = env.step(action)
+            obs = np.concatenate((obs, env_params))
             if scaling == 'log':
                 obs = np.log10(obs + 1)
             elif scaling == 'standard':
                 obs = (obs - states_means) / states_stds
             episode_reward += reward
         rewards.append(episode_reward)
-    env.reset()
     return mean(rewards)    
 
-class dqn_agent:
+class dqn_agent_general:
     def __init__(self, config, model, load=False):
         device = "cuda" if next(model.parameters()).is_cuda else "cpu"
         self.gamma = config['gamma']
@@ -79,17 +83,18 @@ class dqn_agent:
         self.epsilon_step = (self.epsilon_max - self.epsilon_min) / self.epsilon_stop
         self.model = model
         self.criterion = config['criterion'] #torch.nn.SmoothL1Loss() #Or torch.nn.MSELoss()
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config['learning_rate'])
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config['learning_rate'], weight_decay= 1e-4)
         self.device = device  # Store device
         self.load = load
         self.losses = []
         self.best_model_path = config['model_path']  # File name for saving the best model
         if config['scaling']=='standard':
-            self.states_means = np.load('states_means.npy')
-            self.states_stds =np.load('states_stds.npy')
+            self.states_means = np.load('states_means_general.npy')
+            self.states_stds =np.load('states_stds_general.npy')
             self.scaling = 'standard'
         elif config['scaling']=='log':
             self.scaling = 'log'
+        self.env_params = np.load('params.npy')
 
 
     def gradient_step(self):
@@ -105,10 +110,14 @@ class dqn_agent:
             self.optimizer.step()
 
     def train(self, env, max_episode):
+        env0 = TimeLimit(HIVPatient(), max_episode_steps=200)
         episode_return = []
         episode = 0
         episode_cum_reward = 0
         state, _ = env.reset()
+        env.env.k1, env.env.k2, env.env.f = self.env_params[np.random.randint(0, len(self.env_params))]
+        self.env_params = np.array([env.env.k1, env.env.k2, env.env.f])
+        state = np.concatenate((state, self.env_params))
         if self.scaling == 'log':
             state = np.log10(state + 1)
         elif self.scaling == 'standard':
@@ -118,11 +127,9 @@ class dqn_agent:
 
         # Track the best reward
         best_deterministic_reward = -float('inf')
+        best_deterministic_reward_zero = -float('inf')
         if self.load:
-            if env.env.domain_randomization:
-                best_deterministic_reward = torch.load("best_randomized_reward.pth", weights_only=True)
-            else:
-                best_deterministic_reward = torch.load("best_deterministic_reward.pth", weights_only=True)
+            best_deterministic_reward = torch.load("best_deterministic_reward_general.pth", weights_only=True)
             print(f"Loaded model with deterministic reward {best_deterministic_reward:.2f}M")
         while episode < max_episode:
             # update epsilon
@@ -137,6 +144,7 @@ class dqn_agent:
 
             # step
             next_state, reward, done, trunc, _ = env.step(action)
+            next_state = np.concatenate((next_state, self.env_params))
             true_reward = reward/1_000_000
             reward = np.log10(reward + 100_000)
             if self.scaling == 'log':
@@ -146,35 +154,35 @@ class dqn_agent:
             self.memory.append(state, action, reward, next_state, done)
             episode_cum_reward += true_reward
 
-            # train
-            self.gradient_step()
+            if step > self.epsilon_delay:
+                # train
+                self.gradient_step()
 
             # next transition
             step += 1
             if done or trunc:
-                # Check if current episode return is better than the best
-                if env.env.domain_randomization:
-                    deterministic_reward = evaluate_agent(self, env, 20, scaling=self.scaling)/1_000_000
-                else:
-                    deterministic_reward = evaluate_agent(self, env, 1, scaling=self.scaling)/1_000_000
-                # Save the best model
-                if deterministic_reward > best_deterministic_reward:
-                    best_deterministic_reward = deterministic_reward
-                    torch.save(self.model.state_dict(), self.best_model_path)
-                    if env.env.domain_randomization:
-                        torch.save(best_deterministic_reward, "best_randomized_reward.pth")
-                    else:
-                        torch.save(best_deterministic_reward, "best_deterministic_reward.pth")
-                    print("Evaluation deterministic reward", f"{deterministic_reward:.1f}M")
-                #self.gradient_step()
-                print("Episode {:3d}".format(episode), 
-                      "epsilon {:6.2f}".format(epsilon), 
-                      "batch size {:5d}".format(len(self.memory)), 
-                      "episode return {:4.1f}M".format(episode_cum_reward),
-                        "loss {:4.1f}".format(self.losses[-1]),
-                      sep=', ')
+                if step > self.epsilon_delay:
+                    # Check if current episode return is better than the best
+                    deterministic_reward = evaluate_agent_general(self, env, 1, scaling=self.scaling)/1_000_000
+                    deterministic_reward_zero = evaluate_agent_general(self, env=env0, nb_episode=1, scaling=self.scaling)/1_000_000
+                    # Save the best model
+                    if deterministic_reward > 0.7*best_deterministic_reward and deterministic_reward_zero > best_deterministic_reward_zero:
+                        best_deterministic_reward, best_deterministic_reward_zero = deterministic_reward, deterministic_reward_zero
+                        torch.save(self.model.state_dict(), self.best_model_path)
+                        torch.save(best_deterministic_reward, "best_deterministic_reward_general.pth")
+                        print("#Saved model with ", f"{deterministic_reward:.1f}M (rdm) and {deterministic_reward_zero:.1f}M (first)")
+                    print("Evaluation ", f"{deterministic_reward:.1f}M (rdm) and ", f"{deterministic_reward_zero:.1f}M (first)")
+                    #self.gradient_step()
+                    print("Episode {:3d}".format(episode), 
+                        "epsilon {:6.2f}".format(epsilon), 
+                        "batch size {:5d}".format(len(self.memory)), 
+                        "episode return {:4.1f}M".format(episode_cum_reward),
+                            "loss {:4.1f}".format(self.losses[-1]),
+                        sep=', ')
                 episode += 1
                 state, _ = env.reset()
+                self.env_params = np.array([env.env.k1, env.env.k2, env.env.f])
+                state = np.concatenate((state, self.env_params))
                 if self.scaling == 'log':
                     state = np.log10(state + 1)
                 elif self.scaling == 'standard':
